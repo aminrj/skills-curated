@@ -292,7 +292,7 @@ def render_source_status(report: schema.Report, source_info: dict = None) -> str
     elif report.mode in ("both", "x-only", "all", "x-web"):
         lines.append("  ⚠️ X: 0 posts found")
     else:
-        reason = source_info.get("x_skip_reason", "No Bird CLI or XAI_API_KEY")
+        reason = source_info.get("x_skip_reason", "No XAI_API_KEY")
         lines.append(f"  ⏭️ X: skipped — {reason}")
 
     # YouTube

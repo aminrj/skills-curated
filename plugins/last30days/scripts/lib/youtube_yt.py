@@ -49,8 +49,7 @@ def is_ytdlp_installed() -> bool:
 def _extract_core_subject(topic: str) -> str:
     """Extract core subject from verbose query for YouTube search.
 
-    Strips meta/research words to keep only the core product/concept name,
-    similar to bird_x.py's approach.
+    Strips meta/research words to keep only the core product/concept name.
     """
     text = topic.lower().strip()
 

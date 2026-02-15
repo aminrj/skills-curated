@@ -287,8 +287,26 @@ def record_run(
         conn.close()
 
 
+_RUN_COLUMNS = frozenset(
+    {
+        "status",
+        "error_message",
+        "duration_seconds",
+        "findings_new",
+        "findings_updated",
+        "prompt_tokens",
+        "completion_tokens",
+        "token_cost",
+        "source_mode",
+    }
+)
+
+
 def update_run(run_id: int, **kwargs):
     """Update a research run's fields."""
+    invalid = set(kwargs) - _RUN_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid run fields: {invalid}")
     conn = _connect()
     try:
         sets = ", ".join(f"{k} = ?" for k in kwargs)
@@ -419,8 +437,28 @@ def search_findings(query: str, limit: int = 20) -> list[dict[str, Any]]:
         conn.close()
 
 
+_FINDING_COLUMNS = frozenset(
+    {
+        "source",
+        "source_url",
+        "source_title",
+        "author",
+        "content",
+        "summary",
+        "engagement_score",
+        "relevance_score",
+        "last_seen",
+        "sighting_count",
+        "dismissed",
+    }
+)
+
+
 def update_finding(finding_id: int, **kwargs):
     """Update a finding's fields."""
+    invalid = set(kwargs) - _FINDING_COLUMNS
+    if invalid:
+        raise ValueError(f"Invalid finding fields: {invalid}")
     conn = _connect()
     try:
         sets = ", ".join(f"{k} = ?" for k in kwargs)

@@ -385,5 +385,5 @@ Report the PR URL to the user.
 Remove the temporary directory created by the fetch script:
 
 ```bash
-rm -rf {output_dir}
+trash {output_dir}
 ```

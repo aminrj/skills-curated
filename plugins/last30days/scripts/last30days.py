@@ -128,7 +128,6 @@ def _install_global_timeout(timeout_seconds: int):
 
 
 from lib import (  # noqa: E402
-    bird_x,
     dates,
     dedupe,
     entity_extract,
@@ -215,8 +214,8 @@ def _search_reddit(
                 for item in retry_items:
                     if item.get("url") not in existing_urls:
                         reddit_items.append(item)
-            except Exception:
-                pass
+            except Exception as exc:
+                sys.stderr.write(f"[Reddit] Retry failed: {exc}\n")
 
     # Subreddit-targeted fallback if still < 3 results
     if len(reddit_items) < 3 and not mock and not reddit_error:
@@ -235,8 +234,8 @@ def _search_reddit(
             for item in sub_items:
                 if item.get("url") not in existing_urls:
                     reddit_items.append(item)
-        except Exception:
-            pass
+        except Exception as exc:
+            sys.stderr.write(f"[Reddit] Subreddit fallback failed: {exc}\n")
 
     return reddit_items, raw_openai, reddit_error
 
@@ -249,12 +248,8 @@ def _search_x(
     to_date: str,
     depth: str,
     mock: bool,
-    x_source: str = "xai",
 ) -> tuple:
-    """Search X via Bird CLI or xAI (runs in thread).
-
-    Args:
-        x_source: 'bird' or 'xai' - which backend to use
+    """Search X via xAI API (runs in thread).
 
     Returns:
         Tuple of (x_items, raw_response, error)
@@ -267,33 +262,6 @@ def _search_x(
         x_items = xai_x.parse_x_response(raw_response or {})
         return x_items, raw_response, x_error
 
-    # Use Bird if specified
-    if x_source == "bird":
-        try:
-            raw_response = bird_x.search_x(
-                topic,
-                from_date,
-                to_date,
-                depth=depth,
-            )
-        except Exception as e:
-            raw_response = {"error": str(e)}
-            x_error = f"{type(e).__name__}: {e}"
-
-        x_items = bird_x.parse_bird_response(raw_response or {})
-
-        # Check for error in response (Bird returns list on success, dict on error)
-        if (
-            raw_response
-            and isinstance(raw_response, dict)
-            and raw_response.get("error")
-            and not x_error
-        ):
-            x_error = raw_response["error"]
-
-        return x_items, raw_response, x_error
-
-    # Use xAI (original behavior)
     try:
         raw_response = xai_x.search_x(
             config["XAI_API_KEY"],
@@ -417,13 +385,12 @@ def _run_supplemental(
     from_date: str,
     to_date: str,
     depth: str,
-    x_source: str,
     progress: ui.ProgressDisplay = None,
     skip_reddit: bool = False,
 ) -> tuple:
-    """Run Phase 2 supplemental searches based on entities from Phase 1.
+    """Run Phase 2 supplemental Reddit searches based on entities from Phase 1.
 
-    Extracts handles/subreddits from initial results, then runs targeted
+    Extracts subreddits from initial results, then runs targeted
     searches to find additional content the broad search missed.
 
     Args:
@@ -433,7 +400,6 @@ def _run_supplemental(
         from_date: Start date
         to_date: End date
         depth: Research depth
-        x_source: 'bird' or 'xai'
         progress: Optional progress display
         skip_reddit: If True, skip Reddit supplemental (e.g. rate-limited)
 
@@ -442,11 +408,9 @@ def _run_supplemental(
     """
     # Depth-dependent caps
     if depth == "default":
-        max_handles = 3
         max_subs = 3
         count_per = 3
     else:  # deep
-        max_handles = 5
         max_subs = 5
         count_per = 5
 
@@ -454,26 +418,20 @@ def _run_supplemental(
     entities = entity_extract.extract_entities(
         reddit_items,
         x_items,
-        max_handles=max_handles,
+        max_handles=0,
         max_subreddits=max_subs,
     )
 
-    has_handles = entities["x_handles"] and x_source == "bird"
     has_subs = entities["reddit_subreddits"] and not skip_reddit
 
-    if not has_handles and not has_subs:
+    if not has_subs:
         return [], []
 
-    parts = []
-    if has_handles:
-        parts.append(f"@{', @'.join(entities['x_handles'][:3])}")
-    if has_subs:
-        parts.append(f"r/{', r/'.join(entities['reddit_subreddits'][:3])}")
+    parts = [f"r/{', r/'.join(entities['reddit_subreddits'][:3])}"]
     sys.stderr.write(f"[Phase 2] Drilling into {' + '.join(parts)}\n")
     sys.stderr.flush()
 
     supplemental_reddit = []
-    supplemental_x = []
 
     # Collect existing URLs to avoid adding duplicates before dedupe
     existing_urls = set()
@@ -482,60 +440,27 @@ def _run_supplemental(
     for item in x_items:
         existing_urls.add(item.get("url", ""))
 
-    # Run supplemental searches in parallel
-    reddit_future = None
-    x_future = None
-
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        if has_subs:
-            reddit_future = executor.submit(
-                openai_reddit.search_subreddits,
-                entities["reddit_subreddits"],
-                topic,
-                from_date,
-                to_date,
-                count_per,
-            )
-
-        if has_handles:
-            x_future = executor.submit(
-                bird_x.search_handles,
-                entities["x_handles"],
-                topic,
-                from_date,
-                count_per,
-            )
-
-        if reddit_future:
-            try:
-                raw_reddit = reddit_future.result(timeout=30)
-                # Filter out URLs already found in Phase 1
-                supplemental_reddit = [
-                    item for item in raw_reddit if item.get("url", "") not in existing_urls
-                ]
-            except TimeoutError:
-                sys.stderr.write("[Phase 2] Supplemental Reddit timed out (30s)\n")
-            except Exception as e:
-                sys.stderr.write(f"[Phase 2] Supplemental Reddit error: {e}\n")
-
-        if x_future:
-            try:
-                raw_x = x_future.result(timeout=30)
-                supplemental_x = [
-                    item for item in raw_x if item.get("url", "") not in existing_urls
-                ]
-            except TimeoutError:
-                sys.stderr.write("[Phase 2] Supplemental X timed out (30s)\n")
-            except Exception as e:
-                sys.stderr.write(f"[Phase 2] Supplemental X error: {e}\n")
-
-    if supplemental_reddit or supplemental_x:
-        sys.stderr.write(
-            f"[Phase 2] +{len(supplemental_reddit)} Reddit, +{len(supplemental_x)} X\n"
+    try:
+        raw_reddit = openai_reddit.search_subreddits(
+            entities["reddit_subreddits"],
+            topic,
+            from_date,
+            to_date,
+            count_per,
         )
+        supplemental_reddit = [
+            item for item in raw_reddit if item.get("url", "") not in existing_urls
+        ]
+    except TimeoutError:
+        sys.stderr.write("[Phase 2] Supplemental Reddit timed out\n")
+    except Exception as e:
+        sys.stderr.write(f"[Phase 2] Supplemental Reddit error: {e}\n")
+
+    if supplemental_reddit:
+        sys.stderr.write(f"[Phase 2] +{len(supplemental_reddit)} Reddit\n")
         sys.stderr.flush()
 
-    return supplemental_reddit, supplemental_x
+    return supplemental_reddit, []
 
 
 def run_research(
@@ -548,7 +473,6 @@ def run_research(
     depth: str = "default",
     mock: bool = False,
     progress: ui.ProgressDisplay = None,
-    x_source: str = "xai",
     run_youtube: bool = False,
     timeouts: dict = None,
 ) -> tuple:
@@ -658,7 +582,7 @@ def run_research(
             if progress:
                 progress.start_x()
             x_future = executor.submit(
-                _search_x, topic, config, selected_models, from_date, to_date, depth, mock, x_source
+                _search_x, topic, config, selected_models, from_date, to_date, depth, mock
             )
 
         if run_youtube:
@@ -819,7 +743,6 @@ def run_research(
             from_date,
             to_date,
             depth,
-            x_source,
             progress,
             skip_reddit=rate_limited,
         )
@@ -942,9 +865,9 @@ def main():
     # Load config
     config = env.get_config()
 
-    # Auto-detect Bird (no prompts - just use it if available)
+    # Detect X source (xAI API key)
     x_source_status = env.get_x_source_status(config)
-    x_source = x_source_status["source"]  # 'bird', 'xai', or None
+    x_source = x_source_status["source"]  # 'xai' or None
 
     # Auto-detect yt-dlp for YouTube search
     has_ytdlp = env.is_ytdlp_available()
@@ -955,10 +878,7 @@ def main():
         diag = {
             "openai": bool(config.get("OPENAI_API_KEY")),
             "xai": bool(config.get("XAI_API_KEY")),
-            "x_source": x_source_status["source"],
-            "bird_installed": x_source_status["bird_installed"],
-            "bird_authenticated": x_source_status["bird_authenticated"],
-            "bird_username": x_source_status.get("bird_username"),
+            "x_source": x_source,
             "youtube": has_ytdlp,
             "web_search_backend": web_source,
             "parallel_ai": bool(config.get("PARALLEL_API_KEY")),
@@ -982,24 +902,14 @@ def main():
     diag = {
         "openai": bool(config.get("OPENAI_API_KEY")),
         "xai": bool(config.get("XAI_API_KEY")),
-        "x_source": x_source_status["source"],
-        "bird_installed": x_source_status["bird_installed"],
-        "bird_authenticated": x_source_status["bird_authenticated"],
-        "bird_username": x_source_status.get("bird_username"),
+        "x_source": x_source,
         "youtube": has_ytdlp,
         "web_search_backend": web_source,
     }
     ui.show_diagnostic_banner(diag)
 
-    # Check available sources (accounting for Bird auto-detection)
+    # Check available sources
     available = env.get_available_sources(config)
-
-    # Override available if Bird is ready
-    if x_source == "bird":
-        if available == "reddit":
-            available = "both"  # Now have both Reddit + X (via Bird)
-        elif available == "web":
-            available = "x"  # Now have X via Bird
 
     # Mock mode can work without keys
     if args.mock:
@@ -1084,7 +994,6 @@ def main():
         depth,
         args.mock,
         progress,
-        x_source=x_source or "xai",
         run_youtube=has_ytdlp,
         timeouts=timeouts,
     )
@@ -1181,14 +1090,7 @@ def main():
     if not bool(config.get("OPENAI_API_KEY")):
         source_info["reddit_skip_reason"] = "No OPENAI_API_KEY (add to ~/.config/last30days/.env)"
     if not x_source:
-        if x_source_status["bird_installed"]:
-            source_info["x_skip_reason"] = (
-                "Bird installed but not authenticated — log into x.com in browser"
-            )
-        else:
-            source_info["x_skip_reason"] = (
-                "No Bird CLI or XAI_API_KEY (Node.js 22+ needed for Bird)"
-            )
+        source_info["x_skip_reason"] = "No XAI_API_KEY (add to ~/.config/last30days/.env)"
     if not has_ytdlp:
         source_info["youtube_skip_reason"] = "yt-dlp not installed — fix: brew install yt-dlp"
     if not web_source:

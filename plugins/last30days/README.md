@@ -13,7 +13,6 @@ Research any topic from the last 30 days across Reddit, X, YouTube, and the web.
 - **OpenAI API key** -- powers Reddit search via OpenAI's `web_search` tool
 - **xAI API key** -- powers X/Twitter search via xAI's `x_search` tool
 - **yt-dlp** -- powers YouTube search and transcript extraction (`brew install yt-dlp`)
-- **Node.js 22+** -- enables Bird CLI for free X search via browser cookies (optional alternative to xAI key)
 
 All are optional. The skill degrades gracefully: with no keys/tools, it falls back to web search only. Each source you add improves research quality.
 

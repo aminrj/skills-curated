@@ -70,7 +70,7 @@ def get_config() -> dict[str, Any]:
 
 def config_exists() -> bool:
     """Check if configuration file exists."""
-    return CONFIG_FILE.exists()
+    return CONFIG_FILE is not None and CONFIG_FILE.exists()
 
 
 def get_available_sources(config: dict[str, Any]) -> str:
@@ -120,7 +120,7 @@ def get_web_search_source(config: dict[str, Any]) -> str | None:
 
 
 def get_missing_keys(config: dict[str, Any]) -> str:
-    """Determine which sources are missing (accounting for Bird).
+    """Determine which sources are missing.
 
     Returns: 'all', 'both', 'reddit', 'x', 'web', or 'none'
     """
@@ -128,20 +128,13 @@ def get_missing_keys(config: dict[str, Any]) -> str:
     has_xai = bool(config.get("XAI_API_KEY"))
     has_web = has_web_search_keys(config)
 
-    # Check if Bird provides X access (import here to avoid circular dependency)
-    from . import bird_x
-
-    has_bird = bird_x.is_bird_installed() and bird_x.is_bird_authenticated()
-
-    has_x = has_xai or has_bird
-
-    if has_openai and has_x and has_web:
+    if has_openai and has_xai and has_web:
         return "none"
-    elif has_openai and has_x:
+    elif has_openai and has_xai:
         return "web"  # Missing web search keys
     elif has_openai:
         return "x"  # Missing X source (and possibly web)
-    elif has_x:
+    elif has_xai:
         return "reddit"  # Missing OpenAI key (and possibly web)
     else:
         return "all"  # Missing everything
@@ -231,28 +224,15 @@ def validate_sources(
 
 
 def get_x_source(config: dict[str, Any]) -> str | None:
-    """Determine the best available X/Twitter source.
-
-    Priority: Bird (free) → xAI (paid API)
+    """Determine the available X/Twitter source.
 
     Args:
         config: Configuration dict from get_config()
 
     Returns:
-        'bird' if Bird is installed and authenticated,
         'xai' if XAI_API_KEY is configured,
         None if no X source available.
     """
-    # Import here to avoid circular dependency
-    from . import bird_x
-
-    # Check Bird first (free option)
-    if bird_x.is_bird_installed():
-        username = bird_x.is_bird_authenticated()
-        if username:
-            return "bird"
-
-    # Fall back to xAI if key exists
     if config.get("XAI_API_KEY"):
         return "xai"
 
@@ -267,30 +247,14 @@ def is_ytdlp_available() -> bool:
 
 
 def get_x_source_status(config: dict[str, Any]) -> dict[str, Any]:
-    """Get detailed X source status for UI decisions.
+    """Get X source status for UI decisions.
 
     Returns:
-        Dict with keys: source, bird_installed, bird_authenticated,
-        bird_username, xai_available, can_install_bird
+        Dict with keys: source, xai_available
     """
-    from . import bird_x
-
-    bird_status = bird_x.get_bird_status()
     xai_available = bool(config.get("XAI_API_KEY"))
 
-    # Determine active source
-    if bird_status["authenticated"]:
-        source = "bird"
-    elif xai_available:
-        source = "xai"
-    else:
-        source = None
-
     return {
-        "source": source,
-        "bird_installed": bird_status["installed"],
-        "bird_authenticated": bird_status["authenticated"],
-        "bird_username": bird_status["username"],
+        "source": "xai" if xai_available else None,
         "xai_available": xai_available,
-        "can_install_bird": bird_status["can_install"],
     }

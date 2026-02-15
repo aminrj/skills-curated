@@ -128,23 +128,6 @@ PROMO_SINGLE_KEY = {
     "x": "\n💡 You can unlock X with an xAI API key — just ask me how.\n",
 }
 
-# Bird auth help (for local users with vendored Bird CLI)
-BIRD_AUTH_HELP = f"""
-{Colors.YELLOW}Bird authentication failed.{Colors.RESET}
-
-To fix this:
-1. Log into X (twitter.com) in Safari, Chrome, or Firefox
-2. Try again — Bird reads your browser cookies automatically.
-"""
-
-BIRD_AUTH_HELP_PLAIN = """
-Bird authentication failed.
-
-To fix this:
-1. Log into X (twitter.com) in Safari, Chrome, or Firefox
-2. Try again — Bird reads your browser cookies automatically.
-"""
-
 # Spinner frames
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 DOTS_FRAMES = ["   ", ".  ", ".. ", "..."]
@@ -341,22 +324,13 @@ class ProgressDisplay:
             sys.stderr.write(PROMO_SINGLE_KEY[missing])
         sys.stderr.flush()
 
-    def show_bird_auth_help(self):
-        """Show Bird authentication help."""
-        if IS_TTY:
-            sys.stderr.write(BIRD_AUTH_HELP)
-        else:
-            sys.stderr.write(BIRD_AUTH_HELP_PLAIN)
-        sys.stderr.flush()
-
 
 def show_diagnostic_banner(diag: dict):
     """Show pre-flight source status banner when sources are missing.
 
     Args:
         diag: Dict from env diagnostics with keys:
-            openai, xai, x_source, bird_installed, bird_authenticated,
-            bird_username, youtube, web_search_backend
+            openai, xai, x_source, youtube, web_search_backend
     """
     has_openai = diag.get("openai", False)
     has_x = diag.get("x_source") is not None
@@ -395,27 +369,16 @@ def show_diagnostic_banner(diag: dict):
 
         # X/Twitter
         if has_x:
-            source = diag.get("x_source", "")
-            username = diag.get("bird_username", "")
-            label = f"Bird ({username})" if source == "bird" and username else source.upper()
             lines.append(
-                f"{Colors.DIM}│{Colors.RESET}  {Colors.GREEN}✅ X/Twitter{Colors.RESET} — {label}                          {Colors.DIM}│{Colors.RESET}"  # noqa: E501
+                f"{Colors.DIM}│{Colors.RESET}  {Colors.GREEN}✅ X/Twitter{Colors.RESET} — XAI_API_KEY found                  {Colors.DIM}│{Colors.RESET}"  # noqa: E501
             )
         else:
             lines.append(
-                f"{Colors.DIM}│{Colors.RESET}  {Colors.RED}❌ X/Twitter{Colors.RESET} — No Bird CLI or XAI_API_KEY          {Colors.DIM}│{Colors.RESET}"  # noqa: E501
+                f"{Colors.DIM}│{Colors.RESET}  {Colors.RED}❌ X/Twitter{Colors.RESET} — No XAI_API_KEY                      {Colors.DIM}│{Colors.RESET}"  # noqa: E501
             )
-            if diag.get("bird_installed"):
-                lines.append(
-                    f"{Colors.DIM}│{Colors.RESET}     └─ Bird installed but not authenticated         {Colors.DIM}│{Colors.RESET}"  # noqa: E501
-                )
-                lines.append(
-                    f"{Colors.DIM}│{Colors.RESET}     └─ Log into x.com in your browser, then retry   {Colors.DIM}│{Colors.RESET}"  # noqa: E501
-                )
-            else:
-                lines.append(
-                    f"{Colors.DIM}│{Colors.RESET}     └─ Needs Node.js 22+ (Bird is bundled)           {Colors.DIM}│{Colors.RESET}"  # noqa: E501
-                )
+            lines.append(
+                f"{Colors.DIM}│{Colors.RESET}     └─ Add to ~/.config/last30days/.env              {Colors.DIM}│{Colors.RESET}"  # noqa: E501
+            )
 
         # YouTube
         if has_youtube:
@@ -463,13 +426,10 @@ def show_diagnostic_banner(diag: dict):
             lines.append("│     └─ Add to ~/.config/last30days/.env            │")
 
         if has_x:
-            lines.append("│  ✅ X/Twitter — available                            │")
+            lines.append("│  ✅ X/Twitter — XAI_API_KEY found                    │")
         else:
-            lines.append("│  ❌ X/Twitter — No Bird CLI or XAI_API_KEY          │")
-            if diag.get("bird_installed"):
-                lines.append("│     └─ Log into x.com in your browser, then retry   │")
-            else:
-                lines.append("│     └─ Needs Node.js 22+ (Bird is bundled)           │")
+            lines.append("│  ❌ X/Twitter — No XAI_API_KEY                      │")
+            lines.append("│     └─ Add to ~/.config/last30days/.env              │")
 
         if has_youtube:
             lines.append("│  ✅ YouTube   — yt-dlp found                        │")
