@@ -1,0 +1,9 @@
+{
+  "name": "coderabbit-config-generator",
+  "version": "1.0.0",
+  "description": "Generates .coderabbit.yaml configurations tailored to a project by analyzing PR history, commit patterns, and existing code standards. Use when the user asks to create a CodeRabbit config, set up CodeRabbit, or generate custom review rules based on their repository's bug patterns.",
+  "author": {
+    "name": "alchemiststudiosDOTai",
+    "url": "https://github.com/alchemiststudiosDOTai/coderabbit-config-generator"
+  }
+}

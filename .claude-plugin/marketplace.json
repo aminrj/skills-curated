@@ -280,6 +280,16 @@
         "url": "https://github.com/anthropics/claude-plugins-official"
       },
       "source": "./plugins/python-code-simplifier"
+    },
+    {
+      "name": "coderabbit-config-generator",
+      "version": "1.0.0",
+      "description": "Generates .coderabbit.yaml configurations tailored to a project by analyzing PR history, commit patterns, and existing code standards.",
+      "author": {
+        "name": "alchemiststudiosDOTai",
+        "url": "https://github.com/alchemiststudiosDOTai/coderabbit-config-generator"
+      },
+      "source": "./plugins/coderabbit-config-generator"
     }
   ]
 }
