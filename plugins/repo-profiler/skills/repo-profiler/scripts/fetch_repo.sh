@@ -78,11 +78,11 @@ if [[ -d "${DEST}" ]]; then
   exit 1
 fi
 
-gh repo clone "${REPO}" "${DEST}" -- --depth=1 --single-branch
+gh repo clone "${REPO}" "${DEST}" -- --single-branch
 
 # Get repo metadata
 DEFAULT_BRANCH=$(git -C "${DEST}" rev-parse --abbrev-ref HEAD)
-CONTRIBUTOR_COUNT=$(git -C "${DEST}" log --format="%aN" | sort -u | wc -l | tr -d ' ')
+CONTRIBUTOR_COUNT=$(gh api "repos/${REPO}/contributors" --jq 'length' 2>/dev/null || echo "0")
 FILE_COUNT=$(find "${DEST}" -type f -not -path "${DEST}/.git/*" | wc -l | tr -d ' ')
 
 # Print manifest as JSON
