@@ -1,6 +1,6 @@
 # last30days
 
-Research any topic from the last 30 days across Reddit, X, and the web. Surfaces real community discussions with engagement metrics (upvotes, likes, reposts) and synthesizes findings into actionable insights.
+Research any topic from the last 30 days across Reddit, X, YouTube, and the web. Surfaces real community discussions with engagement metrics (upvotes, likes, views, reposts) and synthesizes findings into actionable insights.
 
 ## Install
 
@@ -12,8 +12,10 @@ Research any topic from the last 30 days across Reddit, X, and the web. Surfaces
 
 - **OpenAI API key** -- powers Reddit search via OpenAI's `web_search` tool
 - **xAI API key** -- powers X/Twitter search via xAI's `x_search` tool
+- **yt-dlp** -- powers YouTube search and transcript extraction (`brew install yt-dlp`)
+- **Node.js 22+** -- enables Bird CLI for free X search via browser cookies (optional alternative to xAI key)
 
-Both keys are optional. The skill degrades gracefully: with no keys, it falls back to web search only. With one key, it searches that source plus web.
+All are optional. The skill degrades gracefully: with no keys/tools, it falls back to web search only. Each source you add improves research quality.
 
 ## Setup
 
@@ -28,6 +30,12 @@ EOF
 ```
 
 Environment variables (`OPENAI_API_KEY`, `XAI_API_KEY`) override the config file if set.
+
+Check what sources are available:
+
+```
+python3 scripts/last30days.py --diagnose
+```
 
 ## Usage
 
@@ -46,6 +54,9 @@ Environment variables (`OPENAI_API_KEY`, `XAI_API_KEY`) override the config file
 | `--quick` | Fewer sources, faster results (8-12 each) |
 | `--deep` | More sources, comprehensive research (50-70 Reddit, 40-60 X) |
 | `--include-web` | Add web search alongside Reddit/X |
+| `--store` | Persist findings to SQLite for tracking over time |
+| `--diagnose` | Show source availability diagnostics and exit |
+| `--timeout SECS` | Set global timeout (default: 180s) |
 
 ## Credits
 
