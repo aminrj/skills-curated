@@ -84,11 +84,10 @@ python3 "{baseDir}/scripts/last30days.py" "$ARGUMENTS" --emit=compact 2>&1
 ```
 
 The script will automatically:
-- Detect available sources (API keys, yt-dlp, Bird CLI)
+- Detect available sources (API keys, yt-dlp)
 - Run Reddit/X/YouTube searches based on what's available
 - Signal if WebSearch is needed
 - Use `--diagnose` to check source availability before running
-- Use `--store` to persist findings to SQLite for tracking
 - Use `--timeout SECS` to set a custom global timeout
 
 ---
@@ -133,7 +132,6 @@ For ALL query types:
 - `--quick` -> Faster, fewer sources (8-12 each)
 - (default) -> Balanced (20-30 each)
 - `--deep` -> Comprehensive (50-70 Reddit, 40-60 X)
-- `--store` -> Persist findings to SQLite (~/.local/share/last30days/research.db)
 - `--diagnose` -> Show source availability and exit (useful for debugging)
 - `--timeout SECS` -> Set global timeout (default: 180s, quick: 90s, deep: 300s)
 

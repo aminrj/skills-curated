@@ -53,7 +53,6 @@ python3 scripts/last30days.py --diagnose
 | `--quick` | Fewer sources, faster results (8-12 each) |
 | `--deep` | More sources, comprehensive research (50-70 Reddit, 40-60 X) |
 | `--include-web` | Add web search alongside Reddit/X |
-| `--store` | Persist findings to SQLite for tracking over time |
 | `--diagnose` | Show source availability diagnostics and exit |
 | `--timeout SECS` | Set global timeout (default: 180s) |
 

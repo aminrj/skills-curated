@@ -12,7 +12,6 @@ Options:
     --quick             Faster research with fewer sources (8-12 each)
     --deep              Comprehensive research with more sources (50-70 Reddit, 40-60 X)
     --debug             Enable verbose debug logging
-    --store             Persist findings to SQLite database
     --diagnose          Show source availability diagnostics and exit
 """
 
@@ -25,6 +24,7 @@ import signal
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Add lib to path
@@ -145,6 +145,24 @@ from lib import (  # noqa: E402
     xai_x,
     youtube_yt,
 )
+
+
+@dataclass
+class ResearchResult:
+    """Output from run_research() — raw items, API responses, and errors."""
+
+    reddit_items: list = field(default_factory=list)
+    x_items: list = field(default_factory=list)
+    youtube_items: list = field(default_factory=list)
+    web_items: list = field(default_factory=list)
+    web_needed: bool = False
+    raw_openai: dict | None = None
+    raw_xai: dict | None = None
+    raw_reddit_enriched: list = field(default_factory=list)
+    reddit_error: str | None = None
+    x_error: str | None = None
+    youtube_error: str | None = None
+    web_error: str | None = None
 
 
 def load_fixture(name: str) -> dict:
@@ -387,7 +405,7 @@ def _run_supplemental(
     depth: str,
     progress: ui.ProgressDisplay = None,
     skip_reddit: bool = False,
-) -> tuple:
+) -> list:
     """Run Phase 2 supplemental Reddit searches based on entities from Phase 1.
 
     Extracts subreddits from initial results, then runs targeted
@@ -404,7 +422,7 @@ def _run_supplemental(
         skip_reddit: If True, skip Reddit supplemental (e.g. rate-limited)
 
     Returns:
-        Tuple of (supplemental_reddit, supplemental_x)
+        List of supplemental Reddit items.
     """
     # Depth-dependent caps
     if depth == "default":
@@ -425,7 +443,7 @@ def _run_supplemental(
     has_subs = entities["reddit_subreddits"] and not skip_reddit
 
     if not has_subs:
-        return [], []
+        return []
 
     parts = [f"r/{', r/'.join(entities['reddit_subreddits'][:3])}"]
     sys.stderr.write(f"[Phase 2] Drilling into {' + '.join(parts)}\n")
@@ -460,7 +478,7 @@ def _run_supplemental(
         sys.stderr.write(f"[Phase 2] +{len(supplemental_reddit)} Reddit\n")
         sys.stderr.flush()
 
-    return supplemental_reddit, []
+    return supplemental_reddit
 
 
 def run_research(
@@ -475,17 +493,13 @@ def run_research(
     progress: ui.ProgressDisplay = None,
     run_youtube: bool = False,
     timeouts: dict = None,
-) -> tuple:
+) -> ResearchResult:
     """Run the research pipeline.
 
     Returns:
-        Tuple of (reddit_items, x_items, youtube_items, web_items, web_needed,
-                  raw_openai, raw_xai, raw_reddit_enriched,
-                  reddit_error, x_error, youtube_error, web_error)
-
-    Note: web_needed is True when web search should be performed by the assistant
-    (i.e., no native web search API keys are configured). When native web search
-    runs, web_items will be populated and web_needed will be False.
+        ResearchResult with raw items, API responses, and per-source errors.
+        web_needed is True when the assistant should run its own web search
+        (no native web search API keys configured).
     """
     if timeouts is None:
         timeouts = TIMEOUT_PROFILES[depth]
@@ -543,19 +557,12 @@ def run_research(
                     progress.show_error(f"YouTube error: {e}")
             if progress:
                 progress.end_youtube(len(youtube_items))
-        return (
-            reddit_items,
-            x_items,
-            youtube_items,
-            web_items,
-            web_needed,
-            raw_openai,
-            raw_xai,
-            raw_reddit_enriched,
-            reddit_error,
-            x_error,
-            youtube_error,
-            web_error,
+        return ResearchResult(
+            youtube_items=youtube_items,
+            web_items=web_items,
+            web_needed=web_needed,
+            youtube_error=youtube_error,
+            web_error=web_error,
         )
 
     # Determine which searches to run
@@ -736,7 +743,7 @@ def run_research(
     # Phase 2: Supplemental search based on entities from Phase 1
     # Skip on --quick (speed matters), mock mode, or if Reddit is rate-limiting
     if depth != "quick" and not mock and (reddit_items or x_items):
-        sup_reddit, sup_x = _run_supplemental(
+        sup_reddit = _run_supplemental(
             topic,
             reddit_items,
             x_items,
@@ -748,31 +755,36 @@ def run_research(
         )
         if sup_reddit:
             reddit_items.extend(sup_reddit)
-        if sup_x:
-            x_items.extend(sup_x)
 
-    return (
-        reddit_items,
-        x_items,
-        youtube_items,
-        web_items,
-        web_needed,
-        raw_openai,
-        raw_xai,
-        raw_reddit_enriched,
-        reddit_error,
-        x_error,
-        youtube_error,
-        web_error,
+    return ResearchResult(
+        reddit_items=reddit_items,
+        x_items=x_items,
+        youtube_items=youtube_items,
+        web_items=web_items,
+        web_needed=web_needed,
+        raw_openai=raw_openai,
+        raw_xai=raw_xai,
+        raw_reddit_enriched=raw_reddit_enriched,
+        reddit_error=reddit_error,
+        x_error=x_error,
+        youtube_error=youtube_error,
+        web_error=web_error,
     )
 
 
-def main():
-    # Fix Unicode output on Windows (cp1252 can't encode emoji)
-    if sys.platform == "win32":
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+_SOURCE_TO_MODE = {
+    "all": "all",
+    "both": "both",
+    "reddit": "reddit-only",
+    "reddit-web": "reddit-web",
+    "x": "x-only",
+    "x-web": "x-web",
+    "web": "web-only",
+}
 
+
+def _parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="Research a topic from the last N days on Reddit + X"
     )
@@ -819,11 +831,6 @@ def main():
         help="Number of days to look back (1-30, default: 30)",
     )
     parser.add_argument(
-        "--store",
-        action="store_true",
-        help="Persist findings to SQLite database (~/.local/share/last30days/research.db)",
-    )
-    parser.add_argument(
         "--diagnose",
         action="store_true",
         help="Show source availability diagnostics and exit",
@@ -835,229 +842,114 @@ def main():
         metavar="SECS",
         help="Global timeout in seconds (default: 180, quick: 90, deep: 300)",
     )
+    return parser.parse_args()
 
-    args = parser.parse_args()
 
-    # Enable debug logging if requested
-    if args.debug:
-        os.environ["LAST30DAYS_DEBUG"] = "1"
-        # Re-import http to pick up debug flag
-        from lib import http as http_module
-
-        http_module.DEBUG = True
-
-    # Determine depth
+def _resolve_depth(args: argparse.Namespace) -> str:
+    """Determine research depth from CLI flags."""
     if args.quick and args.deep:
         print("Error: Cannot use both --quick and --deep", file=sys.stderr)
         sys.exit(1)
-    elif args.quick:
-        depth = "quick"
-    elif args.deep:
-        depth = "deep"
-    else:
-        depth = "default"
+    if args.quick:
+        return "quick"
+    if args.deep:
+        return "deep"
+    return "default"
 
-    # Install global timeout watchdog
-    timeouts = TIMEOUT_PROFILES[depth]
-    global_timeout = args.timeout or timeouts["global"]
-    _install_global_timeout(global_timeout)
 
-    # Load config
-    config = env.get_config()
+def _resolve_sources(
+    args: argparse.Namespace,
+    config: dict,
+) -> str:
+    """Validate and resolve the effective source set."""
+    if args.mock:
+        return "both" if args.sources == "auto" else args.sources
 
-    # Detect X source (xAI API key)
-    x_source_status = env.get_x_source_status(config)
-    x_source = x_source_status["source"]  # 'xai' or None
-
-    # Auto-detect yt-dlp for YouTube search
-    has_ytdlp = env.is_ytdlp_available()
-
-    # --diagnose: show source availability and exit
-    if args.diagnose:
-        web_source = env.get_web_search_source(config)
-        diag = {
-            "openai": bool(config.get("OPENAI_API_KEY")),
-            "xai": bool(config.get("XAI_API_KEY")),
-            "x_source": x_source,
-            "youtube": has_ytdlp,
-            "web_search_backend": web_source,
-            "parallel_ai": bool(config.get("PARALLEL_API_KEY")),
-            "brave": bool(config.get("BRAVE_API_KEY")),
-            "openrouter": bool(config.get("OPENROUTER_API_KEY")),
-        }
-        print(json.dumps(diag, indent=2))
-        sys.exit(0)
-
-    # Validate topic (--diagnose doesn't need one)
-    if not args.topic:
-        print("Error: Please provide a topic to research.", file=sys.stderr)
-        print("Usage: python3 last30days.py <topic> [options]", file=sys.stderr)
-        sys.exit(1)
-
-    # Initialize progress display with topic
-    progress = ui.ProgressDisplay(args.topic, show_banner=True)
-
-    # Show diagnostic banner when sources are missing
-    web_source = env.get_web_search_source(config)
-    diag = {
-        "openai": bool(config.get("OPENAI_API_KEY")),
-        "xai": bool(config.get("XAI_API_KEY")),
-        "x_source": x_source,
-        "youtube": has_ytdlp,
-        "web_search_backend": web_source,
-    }
-    ui.show_diagnostic_banner(diag)
-
-    # Check available sources
     available = env.get_available_sources(config)
+    sources, error = env.validate_sources(args.sources, available, args.include_web)
+    if error:
+        if "WebSearch fallback" in error:
+            print(f"Note: {error}", file=sys.stderr)
+        else:
+            print(f"Error: {error}", file=sys.stderr)
+            sys.exit(1)
+    return sources
 
-    # Mock mode can work without keys
+
+def _select_models(args: argparse.Namespace, config: dict) -> dict:
+    """Select OpenAI and xAI models (real or mock)."""
     if args.mock:
-        sources = "both" if args.sources == "auto" else args.sources
-    else:
-        # Validate requested sources against available
-        sources, error = env.validate_sources(args.sources, available, args.include_web)
-        if error:
-            # If it's a warning about WebSearch fallback, print but continue
-            if "WebSearch fallback" in error:
-                print(f"Note: {error}", file=sys.stderr)
-            else:
-                print(f"Error: {error}", file=sys.stderr)
-                sys.exit(1)
-
-    # Get date range
-    from_date, to_date = dates.get_date_range(args.days)
-
-    # Check what keys are missing for promo messaging
-    missing_keys = env.get_missing_keys(config)
-
-    # Show NUX / promo for missing keys BEFORE research
-    if missing_keys != "none":
-        progress.show_promo(missing_keys, diag=diag)
-
-    # Select models
-    if args.mock:
-        # Use mock models
         mock_openai_models = load_fixture("models_openai_sample.json").get("data", [])
         mock_xai_models = load_fixture("models_xai_sample.json").get("data", [])
-        selected_models = models.get_models(
-            {
-                "OPENAI_API_KEY": "mock",
-                "XAI_API_KEY": "mock",
-                **config,
-            },
+        return models.get_models(
+            {"OPENAI_API_KEY": "mock", "XAI_API_KEY": "mock", **config},
             mock_openai_models,
             mock_xai_models,
         )
-    else:
-        selected_models = models.get_models(config)
+    return models.get_models(config)
 
-    # Determine mode string
-    if sources == "all":
-        mode = "all"  # reddit + x + web
-    elif sources == "both":
-        mode = "both"  # reddit + x
-    elif sources == "reddit":
-        mode = "reddit-only"
-    elif sources == "reddit-web":
-        mode = "reddit-web"
-    elif sources == "x":
-        mode = "x-only"
-    elif sources == "x-web":
-        mode = "x-web"
-    elif sources == "web":
-        mode = "web-only"
-    else:
-        mode = sources
 
-    # Run research
-    (
-        reddit_items,
-        x_items,
-        youtube_items,
-        web_items,
-        web_needed,
-        raw_openai,
-        raw_xai,
-        raw_reddit_enriched,
-        reddit_error,
-        x_error,
-        youtube_error,
-        web_error,
-    ) = run_research(
-        args.topic,
-        sources,
-        config,
-        selected_models,
-        from_date,
-        to_date,
-        depth,
-        args.mock,
-        progress,
-        run_youtube=has_ytdlp,
-        timeouts=timeouts,
-    )
-
-    # Processing phase
+def _process_results(
+    result: ResearchResult,
+    topic: str,
+    from_date: str,
+    to_date: str,
+    mode: str,
+    selected_models: dict,
+    progress: ui.ProgressDisplay,
+) -> schema.Report:
+    """Normalize, filter, score, sort, and dedupe raw research into a Report."""
     progress.start_processing()
 
-    # Normalize items
-    normalized_reddit = normalize.normalize_reddit_items(reddit_items, from_date, to_date)
-    normalized_x = normalize.normalize_x_items(x_items, from_date, to_date)
-    normalized_youtube = (
-        normalize.normalize_youtube_items(youtube_items, from_date, to_date)
-        if youtube_items
+    # Normalize
+    norm_reddit = normalize.normalize_reddit_items(result.reddit_items, from_date, to_date)
+    norm_x = normalize.normalize_x_items(result.x_items, from_date, to_date)
+    norm_youtube = (
+        normalize.normalize_youtube_items(result.youtube_items, from_date, to_date)
+        if result.youtube_items
         else []
     )
-    normalized_web = (
-        websearch.normalize_websearch_items(web_items, from_date, to_date) if web_items else []
+    norm_web = (
+        websearch.normalize_websearch_items(result.web_items, from_date, to_date)
+        if result.web_items
+        else []
     )
 
-    # Hard date filter: exclude items with verified dates outside the range
-    # This is the safety net - even if prompts let old content through, this filters it
-    filtered_reddit = normalize.filter_by_date_range(normalized_reddit, from_date, to_date)
-    filtered_x = normalize.filter_by_date_range(normalized_x, from_date, to_date)
-    # YouTube: skip hard date filter — youtube_yt.py already applies a soft filter
-    # that prefers recent videos but keeps older ones for evergreen topics.
-    # YouTube content has a longer shelf life than tweets/posts.
-    filtered_youtube = normalized_youtube
-    filtered_web = (
-        normalize.filter_by_date_range(normalized_web, from_date, to_date) if normalized_web else []
+    # Hard date filter (safety net for old content that slipped through prompts).
+    # YouTube skipped — youtube_yt.py already soft-filters, and video content
+    # has a longer shelf life than tweets/posts.
+    filt_reddit = normalize.filter_by_date_range(norm_reddit, from_date, to_date)
+    filt_x = normalize.filter_by_date_range(norm_x, from_date, to_date)
+    filt_youtube = norm_youtube
+    filt_web = normalize.filter_by_date_range(norm_web, from_date, to_date) if norm_web else []
+
+    # Score and sort
+    scored_reddit = score.sort_items(score.score_reddit_items(filt_reddit))
+    scored_x = score.sort_items(score.score_x_items(filt_x))
+    scored_youtube = (
+        score.sort_items(score.score_youtube_items(filt_youtube)) if filt_youtube else []
     )
+    scored_web = score.sort_items(score.score_websearch_items(filt_web)) if filt_web else []
 
-    # Score items
-    scored_reddit = score.score_reddit_items(filtered_reddit)
-    scored_x = score.score_x_items(filtered_x)
-    scored_youtube = score.score_youtube_items(filtered_youtube) if filtered_youtube else []
-    scored_web = score.score_websearch_items(filtered_web) if filtered_web else []
+    # Dedupe
+    deduped_reddit = dedupe.dedupe_reddit(scored_reddit)
+    deduped_x = dedupe.dedupe_x(scored_x)
+    deduped_youtube = dedupe.dedupe_youtube(scored_youtube) if scored_youtube else []
+    deduped_web = websearch.dedupe_websearch(scored_web) if scored_web else []
 
-    # Sort items
-    sorted_reddit = score.sort_items(scored_reddit)
-    sorted_x = score.sort_items(scored_x)
-    sorted_youtube = score.sort_items(scored_youtube) if scored_youtube else []
-    sorted_web = score.sort_items(scored_web) if scored_web else []
-
-    # Dedupe items
-    deduped_reddit = dedupe.dedupe_reddit(sorted_reddit)
-    deduped_x = dedupe.dedupe_x(sorted_x)
-    deduped_youtube = dedupe.dedupe_youtube(sorted_youtube) if sorted_youtube else []
-    deduped_web = websearch.dedupe_websearch(sorted_web) if sorted_web else []
-
-    # Minimum result guarantee: if all Reddit results were filtered out but
-    # we had raw results, keep top 3 by relevance regardless of score
-    if not deduped_reddit and normalized_reddit:
-        print(
-            "[REDDIT WARNING] All results scored below threshold, keeping top 3 by relevance",
-            file=sys.stderr,
+    # Minimum result guarantee: keep top 3 by relevance if all were filtered out
+    if not deduped_reddit and norm_reddit:
+        sys.stderr.write(
+            "[REDDIT WARNING] All results scored below threshold, keeping top 3 by relevance\n"
         )
-        by_relevance = sorted(normalized_reddit, key=lambda item: item.relevance, reverse=True)
+        by_relevance = sorted(norm_reddit, key=lambda item: item.relevance, reverse=True)
         deduped_reddit = by_relevance[:3]
 
     progress.end_processing()
 
-    # Create report
+    # Build report
     report = schema.create_report(
-        args.topic,
+        topic,
         from_date,
         to_date,
         mode,
@@ -1068,140 +960,30 @@ def main():
     report.x = deduped_x
     report.youtube = deduped_youtube
     report.web = deduped_web
-    report.reddit_error = reddit_error
-    report.x_error = x_error
-    report.youtube_error = youtube_error
-    report.web_error = web_error
-
-    # Generate context snippet
+    report.reddit_error = result.reddit_error
+    report.x_error = result.x_error
+    report.youtube_error = result.youtube_error
+    report.web_error = result.web_error
     report.context_snippet_md = render.render_context_snippet(report)
 
-    # Write outputs
-    render.write_outputs(report, raw_openai, raw_xai, raw_reddit_enriched)
-
-    # Show completion
-    if sources == "web":
-        progress.show_web_only_complete()
-    else:
-        progress.show_complete(len(deduped_reddit), len(deduped_x), len(deduped_youtube))
-
-    # Build source info for status footer
-    source_info = {}
-    if not bool(config.get("OPENAI_API_KEY")):
-        source_info["reddit_skip_reason"] = "No OPENAI_API_KEY (add to ~/.config/last30days/.env)"
-    if not x_source:
-        source_info["x_skip_reason"] = "No XAI_API_KEY (add to ~/.config/last30days/.env)"
-    if not has_ytdlp:
-        source_info["youtube_skip_reason"] = "yt-dlp not installed — fix: brew install yt-dlp"
-    if not web_source:
-        source_info["web_skip_reason"] = (
-            "assistant will use WebSearch (add BRAVE_API_KEY for native search)"
-        )
-
-    # Output result
-    output_result(
-        report,
-        args.emit,
-        web_needed,
-        args.topic,
-        from_date,
-        to_date,
-        missing_keys,
-        args.days,
-        source_info,
-    )
-
-    # Persist findings to SQLite if requested
-    if args.store:
-        import store as store_mod
-
-        store_mod.init_db()
-        topic_row = store_mod.add_topic(args.topic)
-        topic_id = topic_row["id"]
-        run_id = store_mod.record_run(topic_id, source_mode=mode, status="completed")
-
-        findings = []
-        for item in deduped_reddit:
-            findings.append(
-                {
-                    "source": "reddit",
-                    "url": item.url,
-                    "title": item.title,
-                    "author": item.subreddit,
-                    "content": item.title,
-                    "engagement_score": item.engagement.score if item.engagement else 0,
-                    "relevance_score": item.relevance,
-                }
-            )
-        for item in deduped_x:
-            findings.append(
-                {
-                    "source": "x",
-                    "url": item.url,
-                    "title": item.text[:100],
-                    "author": item.author_handle,
-                    "content": item.text,
-                    "engagement_score": item.engagement.likes if item.engagement else 0,
-                    "relevance_score": item.relevance,
-                }
-            )
-        for item in deduped_youtube:
-            findings.append(
-                {
-                    "source": "youtube",
-                    "url": item.url,
-                    "title": item.title,
-                    "author": item.channel_name,
-                    "content": item.transcript_snippet[:500]
-                    if item.transcript_snippet
-                    else item.title,
-                    "engagement_score": item.engagement.views
-                    if item.engagement and item.engagement.views
-                    else 0,
-                    "relevance_score": item.relevance,
-                }
-            )
-        for item in deduped_web:
-            findings.append(
-                {
-                    "source": "web",
-                    "url": item.url,
-                    "title": item.title,
-                    "author": item.source_domain,
-                    "content": item.snippet,
-                    "engagement_score": 0,
-                    "relevance_score": item.relevance,
-                }
-            )
-
-        counts = store_mod.store_findings(run_id, topic_id, findings)
-        store_mod.update_run(
-            run_id,
-            status="completed",
-            findings_new=counts["new"],
-            findings_updated=counts["updated"],
-        )
-        sys.stderr.write(
-            f"[store] Saved {counts['new']} new, {counts['updated']} updated findings\n"
-        )
-        sys.stderr.flush()
+    render.write_outputs(report, result.raw_openai, result.raw_xai, result.raw_reddit_enriched)
+    return report
 
 
-def output_result(
+def _emit_result(
     report: schema.Report,
     emit_mode: str,
-    web_needed: bool = False,
-    topic: str = "",
-    from_date: str = "",
-    to_date: str = "",
-    missing_keys: str = "none",
-    days: int = 30,
-    source_info: dict = None,
+    web_needed: bool,
+    topic: str,
+    from_date: str,
+    to_date: str,
+    missing_keys: str,
+    days: int,
+    source_info: dict,
 ):
-    """Output the result based on emit mode."""
+    """Render and print the final output."""
     if emit_mode == "compact":
         print(render.render_compact(report, missing_keys=missing_keys))
-        # Append source status footer
         print(render.render_source_status(report, source_info))
     elif emit_mode == "json":
         print(json.dumps(report.to_dict(), indent=2))
@@ -1212,7 +994,6 @@ def output_result(
     elif emit_mode == "path":
         print(render.get_context_path())
 
-    # Output WebSearch instructions if needed
     if web_needed:
         print("\n" + "=" * 60)
         print("### WEBSEARCH REQUIRED ###")
@@ -1228,6 +1009,131 @@ def output_result(
         print("results above. WebSearch items should rank LOWER than comparable")
         print("Reddit/X items (they lack engagement metrics).")
         print("=" * 60)
+
+
+def _run_diagnose(config, x_source, has_ytdlp, web_source):
+    """Print source availability diagnostics as JSON and exit."""
+    diag = {
+        "openai": bool(config.get("OPENAI_API_KEY")),
+        "xai": bool(config.get("XAI_API_KEY")),
+        "x_source": x_source,
+        "youtube": has_ytdlp,
+        "web_search_backend": web_source,
+        "parallel_ai": bool(config.get("PARALLEL_API_KEY")),
+        "brave": bool(config.get("BRAVE_API_KEY")),
+        "openrouter": bool(config.get("OPENROUTER_API_KEY")),
+    }
+    print(json.dumps(diag, indent=2))
+    sys.exit(0)
+
+
+def _build_source_info(config, x_source, has_ytdlp, web_source):
+    """Build dict of skip reasons for unavailable sources."""
+    info = {}
+    if not config.get("OPENAI_API_KEY"):
+        info["reddit_skip_reason"] = "No OPENAI_API_KEY (add to ~/.config/last30days/.env)"
+    if not x_source:
+        info["x_skip_reason"] = "No XAI_API_KEY (add to ~/.config/last30days/.env)"
+    if not has_ytdlp:
+        info["youtube_skip_reason"] = "yt-dlp not installed — fix: brew install yt-dlp"
+    if not web_source:
+        info["web_skip_reason"] = (
+            "assistant will use WebSearch (add BRAVE_API_KEY for native search)"
+        )
+    return info
+
+
+def main():
+    if sys.platform == "win32":
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+    args = _parse_args()
+
+    if args.debug:
+        os.environ["LAST30DAYS_DEBUG"] = "1"
+        from lib import http as http_module
+
+        http_module.DEBUG = True
+
+    depth = _resolve_depth(args)
+    timeouts = TIMEOUT_PROFILES[depth]
+    _install_global_timeout(args.timeout or timeouts["global"])
+
+    config = env.get_config()
+    x_source = env.get_x_source(config)
+    has_ytdlp = env.is_ytdlp_available()
+    web_source = env.get_web_search_source(config)
+
+    if args.diagnose:
+        _run_diagnose(config, x_source, has_ytdlp, web_source)
+
+    if not args.topic:
+        print("Error: Please provide a topic to research.", file=sys.stderr)
+        print("Usage: python3 last30days.py <topic> [options]", file=sys.stderr)
+        sys.exit(1)
+
+    progress = ui.ProgressDisplay(args.topic, show_banner=True)
+    diag = {
+        "openai": bool(config.get("OPENAI_API_KEY")),
+        "xai": bool(config.get("XAI_API_KEY")),
+        "x_source": x_source,
+        "youtube": has_ytdlp,
+        "web_search_backend": web_source,
+    }
+    ui.show_diagnostic_banner(diag)
+
+    sources = _resolve_sources(args, config)
+    from_date, to_date = dates.get_date_range(args.days)
+    missing_keys = env.get_missing_keys(config)
+    if missing_keys != "none":
+        progress.show_promo(missing_keys, diag=diag)
+
+    selected_models = _select_models(args, config)
+    mode = _SOURCE_TO_MODE.get(sources, sources)
+
+    result = run_research(
+        args.topic,
+        sources,
+        config,
+        selected_models,
+        from_date,
+        to_date,
+        depth,
+        args.mock,
+        progress,
+        run_youtube=has_ytdlp,
+        timeouts=timeouts,
+    )
+
+    report = _process_results(
+        result,
+        args.topic,
+        from_date,
+        to_date,
+        mode,
+        selected_models,
+        progress,
+    )
+
+    if sources == "web":
+        progress.show_web_only_complete()
+    else:
+        progress.show_complete(len(report.reddit), len(report.x), len(report.youtube))
+
+    source_info = _build_source_info(config, x_source, has_ytdlp, web_source)
+
+    _emit_result(
+        report,
+        args.emit,
+        result.web_needed,
+        args.topic,
+        from_date,
+        to_date,
+        missing_keys,
+        args.days,
+        source_info,
+    )
 
 
 if __name__ == "__main__":
